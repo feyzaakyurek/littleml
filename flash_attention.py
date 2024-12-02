@@ -77,8 +77,10 @@ class FlashAttention(nn.Module):
                 li_new = torch.exp(self.m[i] - mi_new) * self.l[i]
                 # Add the sum coming from this block ij
                 li_new += torch.exp(mij - mi_new) * lij
+                # Multiply by previous l, divide by updated l
+                # also, add the new block of output ij
                 Os[i] = li_new**-1 * (
-                    li_new * torch.exp(self.m[i] - mi_new) * self.O[i]
+                    self.l[i] * torch.exp(self.m[i] - mi_new) * Os[i]
                     + torch.exp(mij - mi_new) * Pij @ Vs[j]
                 )
                 self.l[i] = li_new
