@@ -1,19 +1,22 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import ipdb
 
 
 class Attention(nn.Module):
-    def __init__(self, hidden):
+    def __init__(self, hidden, seed=0):
         super().__init__()
         self.hidden = hidden
+        torch.manual_seed(seed)
         self.attn = nn.Linear(hidden, 3 * hidden)  # h,3h
 
     def forward(self, x):
         """x: B, N, D"""
         B, N, D = x.size()
         assert D == self.hidden
-        q, k, v = self.attn(x).split(3, dim=-1)  # B,N,D
+        out = self.attn(x)
+        q, k, v = out.split(self.hidden, dim=-1)  # B,N,D
         weights = q @ k.transpose(-2, -1)  # B,N,N
         weights = F.softmax(weights, dim=-1)
         out = weights @ v  # B,N,D
@@ -35,7 +38,7 @@ class CausalAttention(Attention):
 
 
 class FlashAttention(nn.Module):
-    def __init__(self, N, d, sram_m):
+    def __init__(self, N, d, sram_m, seed=0):
         super().__init__()
         self.d = d  # hidden size
         self.N = N  # block size
@@ -46,23 +49,26 @@ class FlashAttention(nn.Module):
         self.Br = min(self.M // (4 * d), d)
         # Number of blocks for queries and keys
         self.Tr, self.Tc = (N // self.Br, N // self.Bc)
+        torch.manual_seed(seed)
         self.attn = nn.Linear(N, 3 * d)  # Attention layer
         # Softmax denominator
         self.l = [torch.zeros(self.Br) for _ in range(self.Tr)]
         # Max of exponents for numerical stability
         self.m = [torch.full(self.Br, float("-inf")) for _ in range(self.Tr)]
 
-    def forward(self, x):
-        N, D = x.size()  # Assuming batch size is 1.
-        Q, K, V = self.attn(x).split(3, dim=-1)
+    def forward(self, x, device="cuda"):
+        N, D = x.size()  # TODO: Assuming batch size is 1.
+        Q, K, V = self.attn(x).split(self.d, dim=-1)
         Qs = Q.split(self.Tr, dim=0)  # each Br, d
         Ks = K.split(self.Tc, dim=0)  # each Bc, d
         Vs = V.split(self.Tc, dim=0)  # each Bc, d
         # Output of total size N, d split into blocks of size Br, Bc
         Os = [torch.zeros(self.Br, D) for _ in range(self.Tr)]
-
+        # ipdb.set_trace()
         for j in range(self.Tc):
+            Ks[j].to(device), Vs[j].to(device)
             for i in range(self.Tr):
+                # TODO: load to device.
                 # Compute weights.
                 Sij = Qs[i] @ Ks[j].transpose()  # Br, Bc
                 # For each query, find max weight
@@ -87,3 +93,25 @@ class FlashAttention(nn.Module):
                 self.m[i] = mi_new
 
         return Os
+
+    def backward(self, x, device="cuda"):
+        pass
+
+
+def test_flash_attention():
+    hidden = 8
+    cw = 128
+    sram = 256
+    x = torch.randn(1, cw, hidden)
+    attn = Attention(hidden)
+    out = attn(x)
+
+    fattn = FlashAttention(hidden, cw, hidden, sram)
+    fout = fattn(x[0, :, :])
+    # ipdb.set_trace()
+
+    assert torch.equal(out, fout)
+
+
+if __name__ == "__main__":
+    test_flash_attention()
