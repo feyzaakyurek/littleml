@@ -50,35 +50,38 @@ class FlashAttention(nn.Module):
         # Number of blocks for queries and keys
         self.Tr, self.Tc = (N // self.Br, N // self.Bc)
         torch.manual_seed(seed)
-        self.attn = nn.Linear(N, 3 * d)  # Attention layer
+        self.attn = nn.Linear(d, 3 * d)  # Attention layer
         # Softmax denominator
         self.l = [torch.zeros(self.Br) for _ in range(self.Tr)]
         # Max of exponents for numerical stability
-        self.m = [torch.full(self.Br, float("-inf")) for _ in range(self.Tr)]
+        self.m = [
+            torch.full((self.Br,), float("-inf")) for _ in range(self.Tr)
+        ]
 
     def forward(self, x, device="cuda"):
-        N, D = x.size()  # TODO: Assuming batch size is 1.
+        N, d = x.size()  # TODO: Assuming batch size is 1.
+        assert self.d == d
+
         Q, K, V = self.attn(x).split(self.d, dim=-1)
-        Qs = Q.split(self.Tr, dim=0)  # each Br, d
-        Ks = K.split(self.Tc, dim=0)  # each Bc, d
-        Vs = V.split(self.Tc, dim=0)  # each Bc, d
-        # Output of total size N, d split into blocks of size Br, Bc
-        Os = [torch.zeros(self.Br, D) for _ in range(self.Tr)]
-        # ipdb.set_trace()
+        Qs = list(Q.split(self.Br, dim=0))  # each Br, d
+        Ks = list(K.split(self.Bc, dim=0))  # each Bc, d
+        Vs = list(V.split(self.Bc, dim=0))  # each Bc, d
+
+        # Output of total size N, d split into blocks of size Br, d
+        Os = [torch.zeros(self.Br, d) for _ in range(self.Tr)]
+
         for j in range(self.Tc):
-            Ks[j].to(device), Vs[j].to(device)
             for i in range(self.Tr):
-                # TODO: load to device.
                 # Compute weights.
-                Sij = Qs[i] @ Ks[j].transpose()  # Br, Bc
+                Sij = Qs[i] @ Ks[j].transpose(-2, -1)  # Br, Bc
                 # For each query, find max weight
-                mij = torch.max(Sij, dim=-1)  # Br, 1
+                mij, _ = torch.max(Sij, dim=-1)  # Br, 1
                 # Softmax nominator
                 Pij = torch.exp(Sij - mij)  # Br, Bc
                 # Softmax denominator, one for each query
                 lij = torch.sum(Pij, dim=-1)  # Br
-                # Update max weight
-                mi_new = torch.max(self.m[i], mij)  # 1
+                # Update max weight per query
+                mi_new = torch.max(self.m[i], mij)  # Br
                 # Update the sum so far by adding the previous max and subtracting mi_new
                 li_new = torch.exp(self.m[i] - mi_new) * self.l[i]
                 # Add the sum coming from this block ij
@@ -103,12 +106,13 @@ def test_flash_attention():
     cw = 128
     sram = 256
     x = torch.randn(1, cw, hidden)
-    attn = Attention(hidden)
-    out = attn(x)
+    with torch.no_grad():
+        attn = Attention(hidden)
+        out = attn(x)[0, :, :]
 
-    fattn = FlashAttention(hidden, cw, hidden, sram)
-    fout = fattn(x[0, :, :])
-    # ipdb.set_trace()
+        fattn = FlashAttention(cw, hidden, sram)
+        fout = torch.cat(fattn(x[0, :, :]), dim=0)
+        ipdb.set_trace()
 
     assert torch.equal(out, fout)
 
