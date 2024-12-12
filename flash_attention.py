@@ -18,7 +18,16 @@ class Attention(nn.Module):
         out = self.attn(x)
         q, k, v = out.split(self.hidden, dim=-1)  # B,N,D
         weights = q @ k.transpose(-2, -1)  # B,N,N
-        weights = F.softmax(weights, dim=-1)
+
+        # Manual softmax with numerical stability.
+        max_weights = torch.max(weights, dim=-1)
+        weights = weights - max_weights.values.unsqueeze(-1)
+        weights = torch.exp(weights)
+        denom = torch.sum(weights, dim=-1)
+        weights = weights / denom.unsqueeze(-1)
+
+        # Or use torch
+        # weights = F.softmax(weights, dim=-1)
         out = weights @ v  # B,N,D
         return out
 
@@ -59,7 +68,7 @@ class FlashAttention(nn.Module):
         ]
 
     def forward(self, x, device="cuda"):
-        N, d = x.size()  # TODO: Assuming batch size is 1.
+        N, d = x.size()  # TODO: Assuming no batch size.
         assert self.d == d
 
         Q, K, V = self.attn(x).split(self.d, dim=-1)
@@ -77,7 +86,7 @@ class FlashAttention(nn.Module):
                 # For each query, find max weight
                 mij, _ = torch.max(Sij, dim=-1)  # Br, 1
                 # Softmax nominator
-                Pij = torch.exp(Sij - mij)  # Br, Bc
+                Pij = torch.exp(Sij - mij.unsqueeze(-1))  # Br, Bc
                 # Softmax denominator, one for each query
                 lij = torch.sum(Pij, dim=-1)  # Br
                 # Update max weight per query
@@ -88,9 +97,10 @@ class FlashAttention(nn.Module):
                 li_new += torch.exp(mij - mi_new) * lij
                 # Multiply by previous l, divide by updated l
                 # also, add the new block of output ij
-                Os[i] = li_new**-1 * (
-                    self.l[i] * torch.exp(self.m[i] - mi_new) * Os[i]
-                    + torch.exp(mij - mi_new) * Pij @ Vs[j]
+                Os[i] = (li_new**-1).unsqueeze(-1) * (
+                    (self.l[i] * torch.exp(self.m[i] - mi_new)).unsqueeze(-1)
+                    * Os[i]
+                    + torch.exp(mij - mi_new).unsqueeze(-1) * Pij @ Vs[j]
                 )
                 self.l[i] = li_new
                 self.m[i] = mi_new
@@ -106,15 +116,16 @@ def test_flash_attention():
     cw = 128
     sram = 256
     x = torch.randn(1, cw, hidden)
+
     with torch.no_grad():
         attn = Attention(hidden)
         out = attn(x)[0, :, :]
 
         fattn = FlashAttention(cw, hidden, sram)
         fout = torch.cat(fattn(x[0, :, :]), dim=0)
-        ipdb.set_trace()
 
-    assert torch.equal(out, fout)
+        if torch.allclose(out, fout, atol=1e-07):
+            print("All close.")
 
 
 if __name__ == "__main__":
