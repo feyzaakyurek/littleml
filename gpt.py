@@ -19,7 +19,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True
-    n_layer: bool = 
+    n_layer: int = 8
 
 
 class FeedForward(nn.Module):
@@ -94,12 +94,14 @@ class GPT(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.pos_embedding = nn.Embedding(config.block_size, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
-        self.attn = nn.Sequential([Block(config) for _ in range(config.n_layer)])
+        self.attn = nn.Sequential(
+            [Block(config) for _ in range(config.n_layer)]
+        )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
         self.ln = nn.LayerNorm()
         self.vocab_size = config.vocab_size
         self.block_size = config.block_size
-    
+
     def forward(self, idx, targets=None):
         B, T = idx.size()
         embeds = self.embedding(idx)
@@ -108,12 +110,12 @@ class GPT(nn.Module):
         out = self.dropout(embeds + pos_embeds)
         out = self.attn(out)
         out = self.ln(out)
-        
+
         if targets:
             out = self.lm_head(out)
             loss = F.cross_entropy(out, targets)
         else:
-            out = self.lm_head(out[:,[-1], :])
+            out = self.lm_head(out[:, [-1], :])
             loss = None
 
         return out, loss
@@ -121,13 +123,9 @@ class GPT(nn.Module):
     @torch.no_grad()
     def generate(self, idx, max_new_tokens):
         for i in range(max_new_tokens):
-            logits,_ = self.forward(idx) # B, 1, N
-            preds = torch.argmax(logits, dim=-1) # or sample from multinomial
+            logits, _ = self.forward(idx)  # B, 1, N
+            preds = torch.argmax(logits, dim=-1)  # or sample from multinomial
             # Crop if growing long
-            idx = idx[:,-self.block_size:]
+            idx = idx[:, -self.block_size :]
             idx = torch.cat((idx, preds), dim=-1)
         return idx
-
-
-
-
