@@ -5,6 +5,7 @@ import json
 import random
 import ipdb
 import os
+import copy
 
 
 def dpo_loss(
@@ -14,9 +15,10 @@ def dpo_loss(
     ref_rejected_logps,
     beta=0.1,
 ):
-    logratio_pol = torch.log(policy_chosen_logps) - torch.log(ref_chosen_logps)
-    logratio_ref = torch.log(ref_rejected_logps) - torch.log(ref_chosen_logps)
-    losses = -F.logsigmoid(beta * (logratio_pol + logratio_ref))
+    ipdb.set_trace()
+    logratio_pol = policy_chosen_logps - policy_rejected_logps
+    logratio_ref = ref_chosen_logps - ref_rejected_logps
+    losses = -F.logsigmoid(beta * (logratio_pol - logratio_ref))
     rewards = (
         beta * (policy_chosen_logps - ref_chosen_logps).detach(),
         beta * (ref_rejected_logps - policy_rejected_logps).detach(),
