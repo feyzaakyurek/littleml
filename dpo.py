@@ -72,6 +72,7 @@ def create_data(size, model, tokenizer, overwrite=False):
             {"chosen": c, "rejected": r}
             for c, r in zip(chosen_texts, rejected_texts)
         ]
+        os.makedirs('data', exist_ok=True)
         with jsonlines.open(gpt_data, mode="w") as writer:
             writer.write_all(data)
     return data
